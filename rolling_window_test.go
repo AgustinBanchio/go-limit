@@ -39,3 +39,5 @@ func TestRollingWindow_Allow(t *testing.T) {
 	// Extra request should be denied
 	assert.False(t, limiter.Allow())
 }
+
+// TODO: Add concurrency tests
