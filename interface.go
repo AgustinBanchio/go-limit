@@ -7,10 +7,10 @@ import (
 
 // Stats represents the current statistics of a rate limiter.
 type Stats struct {
-	// The total number of requests allowed since the limiter was created.
-	AllowedRequests int64
+	// The total number of requests allowed since the limiter was created. Doesn't get reset when the limiter is cleared.
+	AllowedRequests int
 	// The total number of requests denied since the limiter was created. This includes requests that were waiting but timed out.
-	DeniedRequests int64
+	DeniedRequests int
 	// The time when the next request will be allowed.
 	NextAllowedTime time.Time
 }
