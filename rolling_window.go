@@ -1,4 +1,4 @@
-package rlmit
+package rlimit
 
 import (
 	"context"

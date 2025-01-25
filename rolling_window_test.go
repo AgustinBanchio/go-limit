@@ -1,6 +1,7 @@
-package rlmit
+package rlimit_test
 
 import (
+	"github.com/agustinbanchio/rlimit"
 	"github.com/stretchr/testify/assert"
 	"testing"
 	"time"
@@ -10,7 +11,7 @@ func TestRollingWindow_Wait(t *testing.T) {
 	t.Parallel()
 
 	// 5 requests per second
-	limiter := NewRollingWindow(5, 1*time.Second)
+	limiter := rlimit.NewRollingWindow(5, 1*time.Second)
 
 	start := time.Now()
 	for i := 0; i < 5; i++ {
@@ -29,7 +30,7 @@ func TestRollingWindow_Allow(t *testing.T) {
 	t.Parallel()
 
 	// 5 requests per second
-	limiter := NewRollingWindow(5, 1*time.Second)
+	limiter := rlimit.NewRollingWindow(5, 1*time.Second)
 
 	// 5 requests should be allowed
 	for i := 0; i < 5; i++ {
