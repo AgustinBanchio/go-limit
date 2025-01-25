@@ -1,7 +1,7 @@
-package rlimit_test
+package limit_test
 
 import (
-	"github.com/agustinbanchio/rlimit"
+	"github.com/agustinbanchio/go-limit"
 	"github.com/stretchr/testify/assert"
 	"testing"
 	"time"
@@ -13,7 +13,7 @@ func TestTokenBucket_Wait(t *testing.T) {
 	start := time.Now()
 
 	// 5 requests per second
-	limiter := rlimit.NewTokenBucket(5, 1*time.Second)
+	limiter := limit.NewTokenBucket(5, 1*time.Second)
 	for i := 0; i < 5; i++ {
 		limiter.Wait()
 	}
@@ -30,7 +30,7 @@ func TestTokenBucket_Allow(t *testing.T) {
 	t.Parallel()
 
 	// 5 requests per second
-	limiter := rlimit.NewTokenBucket(5, 1*time.Second)
+	limiter := limit.NewTokenBucket(5, 1*time.Second)
 
 	// 5 requests should be allowed
 	for i := 0; i < 5; i++ {

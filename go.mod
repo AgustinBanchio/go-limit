@@ -1,4 +1,4 @@
-module github.com/agustinbanchio/rlimit
+module github.com/agustinbanchio/go-limit
 
 go 1.23.5
 

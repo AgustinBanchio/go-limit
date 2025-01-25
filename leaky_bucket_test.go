@@ -1,7 +1,7 @@
-package rlimit_test
+package limit_test
 
 import (
-	"github.com/agustinbanchio/rlimit"
+	"github.com/agustinbanchio/go-limit"
 	"github.com/stretchr/testify/assert"
 	"log"
 	"testing"
@@ -14,7 +14,7 @@ func TestLeakyBucket_Wait(t *testing.T) {
 	start := time.Now()
 
 	// 5 requests per second
-	limiter := rlimit.NewLeakyBucket(5, 1*time.Second, 100)
+	limiter := limit.NewLeakyBucket(5, 1*time.Second, 100)
 
 	limiter.Wait()
 	log.Default().Print(time.Since(start))
@@ -35,7 +35,7 @@ func TestLeakyBucket_Allow(t *testing.T) {
 	t.Parallel()
 
 	// 5 requests per second
-	limiter := rlimit.NewLeakyBucket(5, 1*time.Second, 100)
+	limiter := limit.NewLeakyBucket(5, 1*time.Second, 100)
 
 	// 1st request should be allowed
 	assert.True(t, limiter.Allow())
