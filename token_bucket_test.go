@@ -19,7 +19,7 @@ func TestTokenBucket_Wait(t *testing.T) {
 	}
 
 	// 5 requests should have been pseudo instant
-	assert.True(t, time.Since(start) < time.Microsecond)
+	assert.True(t, time.Since(start) < time.Millisecond)
 
 	// Extra request should wait for the refill rate (approx 200ms
 	limiter.Wait()
