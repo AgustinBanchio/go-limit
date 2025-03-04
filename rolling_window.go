@@ -2,6 +2,7 @@ package limit
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -19,9 +20,10 @@ type rollingWindow struct {
 	rateDuration  time.Duration
 
 	// State
-	allowedEvents int
-	deniedEvents  int
-	rollingWindow []eventLog
+	allowedEvents       int
+	deniedEvents        int
+	rollingWindow       []eventLog
+	pendingReservations map[*rollingWindowReservation]struct{} // Track actual reservation objects
 }
 
 // NewRollingWindow creates a new rolling window rate limiter.
@@ -29,10 +31,11 @@ type rollingWindow struct {
 // The duration parameter is the time window in which the events are allowed.
 func NewRollingWindow(count int, duration time.Duration) Limiter {
 	return &rollingWindow{
-		mux:           sync.Mutex{},
-		maxEventCount: count,
-		rateDuration:  duration,
-		rollingWindow: make([]eventLog, 0),
+		mux:                 sync.Mutex{},
+		maxEventCount:       count,
+		rateDuration:        duration,
+		rollingWindow:       make([]eventLog, 0),
+		pendingReservations: make(map[*rollingWindowReservation]struct{}),
 	}
 }
 
@@ -40,8 +43,9 @@ func (r *rollingWindow) WaitContext(ctx context.Context) error {
 	for {
 		r.mux.Lock()
 		r.removeExpiredEvents()
+		r.cleanupExpiredReservations() // Clean up expired reservations
 
-		if len(r.rollingWindow) < r.maxEventCount {
+		if len(r.rollingWindow)+len(r.pendingReservations) < r.maxEventCount {
 			r.rollingWindow = append(r.rollingWindow, eventLog{timestamp: time.Now()})
 			r.allowedEvents++
 			r.mux.Unlock()
@@ -76,9 +80,10 @@ func (r *rollingWindow) Allow() bool {
 	r.mux.Lock()
 	defer r.mux.Unlock()
 	r.removeExpiredEvents()
+	r.cleanupExpiredReservations() // Clean up expired reservations
 
-	// Check if the event can be allowed
-	if len(r.rollingWindow) < r.maxEventCount {
+	// Check considering both active events and pending reservations
+	if len(r.rollingWindow)+len(r.pendingReservations) < r.maxEventCount {
 		r.rollingWindow = append(r.rollingWindow, eventLog{timestamp: time.Now()})
 		r.allowedEvents++
 		return true
@@ -89,14 +94,35 @@ func (r *rollingWindow) Allow() bool {
 }
 
 func (r *rollingWindow) removeExpiredEvents() {
+	// This must be called with the mutex already locked
 	for len(r.rollingWindow) > 0 && time.Since(r.rollingWindow[0].timestamp) > r.rateDuration {
 		r.rollingWindow = r.rollingWindow[1:]
+	}
+}
+
+func (r *rollingWindow) cleanupExpiredReservations() {
+	// This must be called with the mutex already locked
+	now := time.Now()
+	for res := range r.pendingReservations {
+		if res.expiresAt != nil && now.After(*res.expiresAt) {
+			delete(r.pendingReservations, res)
+		}
 	}
 }
 
 func (r *rollingWindow) Clear() {
 	r.mux.Lock()
 	defer r.mux.Unlock()
+
+	// Mark all reservations as canceled
+	for res := range r.pendingReservations {
+		res.canceled = true
+	}
+
+	// Clear the pending reservations map
+	r.pendingReservations = make(map[*rollingWindowReservation]struct{})
+
+	// Clear the rolling window
 	r.rollingWindow = make([]eventLog, 0)
 }
 
@@ -113,5 +139,101 @@ func (r *rollingWindow) Stats() Stats {
 		AllowedRequests: r.allowedEvents,
 		DeniedRequests:  r.deniedEvents,
 		NextAllowedTime: nextAllowedTime,
+	}
+}
+
+func (r *rollingWindow) Reserve() Reservation {
+	reservation, _ := r.ReserveContext(context.Background())
+	return reservation
+}
+
+func (r *rollingWindow) ReserveTimeout(timeout time.Duration) (Reservation, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return r.ReserveContext(ctx)
+}
+
+func (r *rollingWindow) ReserveContext(ctx context.Context) (Reservation, error) {
+	var reservationDuration *time.Duration
+	if deadline, ok := ctx.Deadline(); ok {
+		reservationDuration = new(time.Duration)
+		*reservationDuration = deadline.Sub(time.Now())
+	}
+	for {
+		r.mux.Lock()
+		r.removeExpiredEvents()
+		r.cleanupExpiredReservations() // Clean up expired reservations
+
+		// Consider both actual events and pending reservations
+		if len(r.rollingWindow)+len(r.pendingReservations) < r.maxEventCount {
+			var expiresAt *time.Time
+			if reservationDuration != nil {
+				expiresAt = new(time.Time)
+				*expiresAt = time.Now().Add(*reservationDuration)
+			}
+			reservation := &rollingWindowReservation{
+				limiter:   r,
+				expiresAt: expiresAt, // Expires after same time as wait time
+			}
+			r.pendingReservations[reservation] = struct{}{} // Track this reservation
+			r.mux.Unlock()
+			return reservation, nil
+		}
+
+		nextAllowedTime := r.rollingWindow[0].timestamp.Add(r.rateDuration)
+		r.mux.Unlock()
+
+		select {
+		case <-ctx.Done():
+			r.mux.Lock()
+			r.deniedEvents++
+			r.mux.Unlock()
+			return nil, ctx.Err()
+		case <-time.After(nextAllowedTime.Sub(time.Now())):
+			// Continue waiting
+		}
+	}
+}
+
+// rollingWindowReservation implements the Reservation interface
+type rollingWindowReservation struct {
+	limiter   *rollingWindow
+	expiresAt *time.Time
+	consumed  bool
+	canceled  bool
+}
+
+func (r *rollingWindowReservation) Consume() error {
+	r.limiter.mux.Lock()
+	defer r.limiter.mux.Unlock()
+
+	if r.consumed {
+		return fmt.Errorf("reservation already consumed")
+	}
+
+	if r.canceled {
+		return fmt.Errorf("reservation was canceled")
+	}
+
+	if r.expiresAt != nil && time.Now().After(*r.expiresAt) {
+		delete(r.limiter.pendingReservations, r) // Remove expired reservation
+		return fmt.Errorf("reservation expired")
+	}
+
+	r.consumed = true
+	delete(r.limiter.pendingReservations, r) // Remove from pending
+	r.limiter.rollingWindow = append(r.limiter.rollingWindow, eventLog{timestamp: time.Now()})
+	r.limiter.allowedEvents++
+
+	return nil
+}
+
+func (r *rollingWindowReservation) Cancel() {
+	r.limiter.mux.Lock()
+	defer r.limiter.mux.Unlock()
+
+	if !r.consumed {
+		r.canceled = true
+		delete(r.limiter.pendingReservations, r) // Remove from pending
 	}
 }

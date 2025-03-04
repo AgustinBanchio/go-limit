@@ -2,6 +2,7 @@ package limit
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -19,15 +20,19 @@ type tokenBucket struct {
 	allowedEvents int
 	deniedEvents  int
 	lastRefill    time.Time
+
+	// Reservations tracking
+	pendingReservations map[*tokenBucketReservation]struct{}
 }
 
 func NewTokenBucket(count int, duration time.Duration) Limiter {
 	return &tokenBucket{
-		mux:             sync.Mutex{},
-		maxCapacity:     count,
-		currentCapacity: count,
-		refillRate:      duration / time.Duration(count),
-		lastRefill:      time.Now(),
+		mux:                 sync.Mutex{},
+		maxCapacity:         count,
+		currentCapacity:     count,
+		refillRate:          duration / time.Duration(count),
+		lastRefill:          time.Now(),
+		pendingReservations: make(map[*tokenBucketReservation]struct{}),
 	}
 }
 
@@ -35,8 +40,9 @@ func (t *tokenBucket) WaitContext(ctx context.Context) error {
 	for {
 		t.mux.Lock()
 		t.refill()
+		t.cleanupExpiredReservations()
 
-		if t.currentCapacity > 0 {
+		if t.currentCapacity-len(t.pendingReservations) > 0 {
 			t.currentCapacity--
 			t.allowedEvents++
 			t.mux.Unlock()
@@ -71,8 +77,9 @@ func (t *tokenBucket) Allow() bool {
 	t.mux.Lock()
 	defer t.mux.Unlock()
 	t.refill()
+	t.cleanupExpiredReservations()
 
-	if t.currentCapacity > 0 {
+	if t.currentCapacity-len(t.pendingReservations) > 0 {
 		t.currentCapacity--
 		t.allowedEvents++
 		return true
@@ -85,6 +92,14 @@ func (t *tokenBucket) Allow() bool {
 func (t *tokenBucket) Clear() {
 	t.mux.Lock()
 	defer t.mux.Unlock()
+
+	// Mark all reservations as canceled
+	for res := range t.pendingReservations {
+		res.canceled = true
+	}
+
+	// Clear the pending reservations map
+	t.pendingReservations = make(map[*tokenBucketReservation]struct{})
 	t.currentCapacity = t.maxCapacity
 	t.lastRefill = time.Now()
 }
@@ -120,4 +135,111 @@ func (t *tokenBucket) refill() {
 		t.currentCapacity += newTokens
 	}
 	t.lastRefill = now
+}
+
+func (t *tokenBucket) cleanupExpiredReservations() {
+	// This must be called with the mutex already locked
+	now := time.Now()
+	for res := range t.pendingReservations {
+		if res.expiresAt != nil && now.After(*res.expiresAt) {
+			delete(t.pendingReservations, res)
+		}
+	}
+}
+
+func (t *tokenBucket) Reserve() Reservation {
+	reservation, _ := t.ReserveContext(context.Background())
+	return reservation
+}
+
+func (t *tokenBucket) ReserveTimeout(timeout time.Duration) (Reservation, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return t.ReserveContext(ctx)
+}
+
+func (t *tokenBucket) ReserveContext(ctx context.Context) (Reservation, error) {
+	var reservationDuration *time.Duration
+	if deadline, ok := ctx.Deadline(); ok {
+		reservationDuration = new(time.Duration)
+		*reservationDuration = deadline.Sub(time.Now())
+	}
+
+	for {
+		t.mux.Lock()
+		t.refill()
+		t.cleanupExpiredReservations()
+
+		if t.currentCapacity-len(t.pendingReservations) > 0 {
+			var expiresAt *time.Time
+			if reservationDuration != nil {
+				expiresAt = new(time.Time)
+				*expiresAt = time.Now().Add(*reservationDuration)
+			}
+			reservation := &tokenBucketReservation{
+				limiter:   t,
+				expiresAt: expiresAt,
+			}
+			t.pendingReservations[reservation] = struct{}{}
+			t.mux.Unlock()
+			return reservation, nil
+		}
+
+		nextRefillTime := t.lastRefill.Add(t.refillRate)
+		t.mux.Unlock()
+
+		select {
+		case <-ctx.Done():
+			t.mux.Lock()
+			t.deniedEvents++
+			t.mux.Unlock()
+			return nil, ctx.Err()
+		case <-time.After(nextRefillTime.Sub(time.Now())):
+			// Continue waiting for a token
+		}
+	}
+}
+
+// tokenBucketReservation implements the Reservation interface
+type tokenBucketReservation struct {
+	limiter   *tokenBucket
+	expiresAt *time.Time
+	consumed  bool
+	canceled  bool
+}
+
+func (r *tokenBucketReservation) Consume() error {
+	r.limiter.mux.Lock()
+	defer r.limiter.mux.Unlock()
+
+	if r.consumed {
+		return fmt.Errorf("reservation already consumed")
+	}
+
+	if r.canceled {
+		return fmt.Errorf("reservation was canceled")
+	}
+
+	if r.expiresAt != nil && time.Now().After(*r.expiresAt) {
+		delete(r.limiter.pendingReservations, r)
+		return fmt.Errorf("reservation expired")
+	}
+
+	r.consumed = true
+	delete(r.limiter.pendingReservations, r)
+	// Only decrease capacity when actually consumed
+	r.limiter.currentCapacity--
+	r.limiter.allowedEvents++
+
+	return nil
+}
+
+func (r *tokenBucketReservation) Cancel() {
+	r.limiter.mux.Lock()
+	defer r.limiter.mux.Unlock()
+
+	if !r.consumed {
+		r.canceled = true
+		delete(r.limiter.pendingReservations, r)
+	}
 }

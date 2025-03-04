@@ -30,4 +30,18 @@ type Limiter interface {
 	Clear()
 	// Stats returns the current stats of the limiter.
 	Stats() Stats
+	// Reserve blocks until the limiter can return a Reservation object. The Reservation will not expire.
+	Reserve() Reservation
+	// ReserveTimeout blocks until the limiter can return a Reservation object or the timeout expires. The Reservation will have a timeout equal to the wait time.
+	ReserveTimeout(timeout time.Duration) (Reservation, error)
+	// ReserveContext requests a reservation with a context and returns a Reservation object. The Reservation will have a timeout equal to the wait time.
+	ReserveContext(ctx context.Context) (Reservation, error)
+}
+
+// Reservation represents a reservation against a rate limiter that can be consumed or canceled
+type Reservation interface {
+	// Consume uses the reservation, returning an error if the reservation expired
+	Consume() error
+	// Cancel releases the reservation without using it
+	Cancel()
 }
