@@ -66,6 +66,14 @@ func main() {
 
 ```
 
+## Roadmap
+
+Not much is planned for this module, but the following features are on the list:
+
+- ReservationGroups that allow reserving from multiple limiters at once with the same TTL.
+- Respect FIFO order for all implementations.
+- Immediate unblocking when a cancellation occurs.
+
 ## Purpose and Alternatives
 
 This module is intended to provide an easy-to-work with interface for common rate limiting needs. Contributions and
