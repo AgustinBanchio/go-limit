@@ -79,8 +79,11 @@ Not much is planned for this module, but the following features are on the list:
 This module is intended to provide an easy-to-work with interface for common rate limiting needs. Contributions and
 suggestions are welcome, though implementation changes are not guaranteed.
 
+This module does not have any direct external dependency other than for testing purposes.
+
 If this interface or implementation doesn't meet your requirements, feel free to fork the project. Alternatively,
 consider these excellent rate limiting libraries for Go:
 
 [golang.org/x/time/rate](https://pkg.go.dev/golang.org/x/time/rate) - The extended standard library Go rate limiter
+
 [uber-go/ratelimit](https://github.com/uber-go/ratelimit) - A leaky bucket rate limiter
