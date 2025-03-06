@@ -54,13 +54,17 @@ func (r *rollingWindow) WaitContext(ctx context.Context) error {
 
 		r.mux.Unlock()
 
+		waitDuration := r.rateDuration
+		if len(r.rollingWindow) > 0 {
+			waitDuration = r.rollingWindow[0].timestamp.Add(r.rateDuration).Sub(time.Now())
+		}
 		select {
 		case <-ctx.Done():
 			r.mux.Lock()
 			r.deniedEvents++
 			r.mux.Unlock()
 			return ctx.Err()
-		case <-time.After(r.rollingWindow[0].timestamp.Add(r.rateDuration).Sub(time.Now())):
+		case <-time.After(waitDuration):
 			// Wait until the next event is allowed
 		}
 	}
@@ -76,7 +80,7 @@ func (r *rollingWindow) WaitTimeout(timeout time.Duration) error {
 	return r.WaitContext(ctx)
 }
 
-func (r *rollingWindow) Allow() bool {
+func (r *rollingWindow) Allowed() bool {
 	r.mux.Lock()
 	defer r.mux.Unlock()
 	r.removeExpiredEvents()
@@ -142,23 +146,18 @@ func (r *rollingWindow) Stats() Stats {
 	}
 }
 
-func (r *rollingWindow) Reserve() Reservation {
-	reservation, _ := r.ReserveContext(context.Background())
+func (r *rollingWindow) Reserve(reservationTTL *time.Duration) Reservation {
+	reservation, _ := r.ReserveContext(context.Background(), reservationTTL)
 	return reservation
 }
 
-func (r *rollingWindow) ReserveTimeout(timeout time.Duration) (Reservation, error) {
+func (r *rollingWindow) ReserveTimeout(timeout time.Duration, reservationTTL *time.Duration) (Reservation, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	return r.ReserveContext(ctx)
+	return r.ReserveContext(ctx, reservationTTL)
 }
 
-func (r *rollingWindow) ReserveContext(ctx context.Context) (Reservation, error) {
-	var reservationDuration *time.Duration
-	if deadline, ok := ctx.Deadline(); ok {
-		reservationDuration = new(time.Duration)
-		*reservationDuration = deadline.Sub(time.Now())
-	}
+func (r *rollingWindow) ReserveContext(ctx context.Context, reservationTTL *time.Duration) (Reservation, error) {
 	for {
 		r.mux.Lock()
 		r.removeExpiredEvents()
@@ -167,9 +166,9 @@ func (r *rollingWindow) ReserveContext(ctx context.Context) (Reservation, error)
 		// Consider both actual events and pending reservations
 		if len(r.rollingWindow)+len(r.pendingReservations) < r.maxEventCount {
 			var expiresAt *time.Time
-			if reservationDuration != nil {
+			if reservationTTL != nil {
 				expiresAt = new(time.Time)
-				*expiresAt = time.Now().Add(*reservationDuration)
+				*expiresAt = time.Now().Add(*reservationTTL)
 			}
 			reservation := &rollingWindowReservation{
 				limiter:   r,
@@ -180,7 +179,10 @@ func (r *rollingWindow) ReserveContext(ctx context.Context) (Reservation, error)
 			return reservation, nil
 		}
 
-		nextAllowedTime := r.rollingWindow[0].timestamp.Add(r.rateDuration)
+		waitDuration := r.rateDuration
+		if len(r.rollingWindow) > 0 {
+			waitDuration = r.rollingWindow[0].timestamp.Add(r.rateDuration).Sub(time.Now())
+		}
 		r.mux.Unlock()
 
 		select {
@@ -189,7 +191,7 @@ func (r *rollingWindow) ReserveContext(ctx context.Context) (Reservation, error)
 			r.deniedEvents++
 			r.mux.Unlock()
 			return nil, ctx.Err()
-		case <-time.After(nextAllowedTime.Sub(time.Now())):
+		case <-time.After(waitDuration):
 			// Continue waiting
 		}
 	}

@@ -24,18 +24,18 @@ type Limiter interface {
 	WaitTimeout(timeout time.Duration) error
 	// WaitContext blocks until the limiter allows the operation to proceed or the context is done.
 	WaitContext(ctx context.Context) error
-	// Allow returns true if the operation is allowed to proceed. It's non-blocking.
-	Allow() bool
+	// Allowed returns true if the operation is allowed to proceed. It's non-blocking.
+	Allowed() bool
 	// Clear clears the limiter.
 	Clear()
 	// Stats returns the current stats of the limiter.
 	Stats() Stats
-	// Reserve blocks until the limiter can return a Reservation object. The Reservation will not expire.
-	Reserve() Reservation
-	// ReserveTimeout blocks until the limiter can return a Reservation object or the timeout expires. The Reservation will have a timeout equal to the wait time.
-	ReserveTimeout(timeout time.Duration) (Reservation, error)
-	// ReserveContext requests a reservation with a context and returns a Reservation object. The Reservation will have a timeout equal to the wait time.
-	ReserveContext(ctx context.Context) (Reservation, error)
+	// Reserve blocks until the limiter can return a Reservation object. The Reservation has its own expiry duration or TTL. If nil it does not expire.
+	Reserve(reservationTTL *time.Duration) Reservation
+	// ReserveTimeout blocks until the limiter can return a Reservation object or the timeout expires. The Reservation has its own expiry duration or TTL. If nil it does not expire.
+	ReserveTimeout(timeout time.Duration, reservationTTL *time.Duration) (Reservation, error)
+	// ReserveContext requests a reservation with a context and returns a Reservation object.  The Reservation has its own expiry duration or TTL. If nil it does not expire. Context cancellation will only impact getting the reservation but will not expire the reservation itself.
+	ReserveContext(ctx context.Context, reservationTTL *time.Duration) (Reservation, error)
 }
 
 // Reservation represents a reservation against a rate limiter that can be consumed or canceled

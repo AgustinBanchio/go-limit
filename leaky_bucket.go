@@ -84,7 +84,7 @@ func (l *leakyBucket) WaitTimeout(timeout time.Duration) error {
 }
 
 // Allow does not increase capacity as it does not wait.
-func (l *leakyBucket) Allow() bool {
+func (l *leakyBucket) Allowed() bool {
 	l.mux.Lock()
 	defer l.mux.Unlock()
 
@@ -142,24 +142,18 @@ func (l *leakyBucket) Stats() Stats {
 	}
 }
 
-func (l *leakyBucket) Reserve() Reservation {
-	reservation, _ := l.ReserveContext(context.Background())
+func (l *leakyBucket) Reserve(reservationTTL *time.Duration) Reservation {
+	reservation, _ := l.ReserveContext(context.Background(), reservationTTL)
 	return reservation
 }
 
-func (l *leakyBucket) ReserveTimeout(timeout time.Duration) (Reservation, error) {
+func (l *leakyBucket) ReserveTimeout(timeout time.Duration, reservationTTL *time.Duration) (Reservation, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	return l.ReserveContext(ctx)
+	return l.ReserveContext(ctx, reservationTTL)
 }
 
-func (l *leakyBucket) ReserveContext(ctx context.Context) (Reservation, error) {
-	var reservationDuration *time.Duration
-	if deadline, ok := ctx.Deadline(); ok {
-		reservationDuration = new(time.Duration)
-		*reservationDuration = deadline.Sub(time.Now())
-	}
-
+func (l *leakyBucket) ReserveContext(ctx context.Context, reservationTTL *time.Duration) (Reservation, error) {
 	l.mux.Lock()
 	l.cleanupExpiredReservations()
 
@@ -170,9 +164,9 @@ func (l *leakyBucket) ReserveContext(ctx context.Context) (Reservation, error) {
 	}
 
 	var expiresAt *time.Time
-	if reservationDuration != nil {
+	if reservationTTL != nil {
 		expiresAt = new(time.Time)
-		*expiresAt = time.Now().Add(*reservationDuration)
+		*expiresAt = time.Now().Add(*reservationTTL)
 	}
 
 	reservation := &leakyBucketReservation{

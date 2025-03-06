@@ -73,7 +73,7 @@ func (t *tokenBucket) WaitTimeout(timeout time.Duration) error {
 	return t.WaitContext(ctx)
 }
 
-func (t *tokenBucket) Allow() bool {
+func (t *tokenBucket) Allowed() bool {
 	t.mux.Lock()
 	defer t.mux.Unlock()
 	t.refill()
@@ -147,24 +147,18 @@ func (t *tokenBucket) cleanupExpiredReservations() {
 	}
 }
 
-func (t *tokenBucket) Reserve() Reservation {
-	reservation, _ := t.ReserveContext(context.Background())
+func (t *tokenBucket) Reserve(reservationTTL *time.Duration) Reservation {
+	reservation, _ := t.ReserveContext(context.Background(), reservationTTL)
 	return reservation
 }
 
-func (t *tokenBucket) ReserveTimeout(timeout time.Duration) (Reservation, error) {
+func (t *tokenBucket) ReserveTimeout(timeout time.Duration, reservationTTL *time.Duration) (Reservation, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	return t.ReserveContext(ctx)
+	return t.ReserveContext(ctx, reservationTTL)
 }
 
-func (t *tokenBucket) ReserveContext(ctx context.Context) (Reservation, error) {
-	var reservationDuration *time.Duration
-	if deadline, ok := ctx.Deadline(); ok {
-		reservationDuration = new(time.Duration)
-		*reservationDuration = deadline.Sub(time.Now())
-	}
-
+func (t *tokenBucket) ReserveContext(ctx context.Context, reservationTTL *time.Duration) (Reservation, error) {
 	for {
 		t.mux.Lock()
 		t.refill()
@@ -172,9 +166,9 @@ func (t *tokenBucket) ReserveContext(ctx context.Context) (Reservation, error) {
 
 		if t.currentCapacity-len(t.pendingReservations) > 0 {
 			var expiresAt *time.Time
-			if reservationDuration != nil {
+			if reservationTTL != nil {
 				expiresAt = new(time.Time)
-				*expiresAt = time.Now().Add(*reservationDuration)
+				*expiresAt = time.Now().Add(*reservationTTL)
 			}
 			reservation := &tokenBucketReservation{
 				limiter:   t,
